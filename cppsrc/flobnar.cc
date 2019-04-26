@@ -34,6 +34,12 @@ struct Position {
     int row;
     int column;
     explicit Position(int r, int c) : row(r), column(c) {}
+    Position min_with(int r, int c) const {
+        return Position(std::min(row, r), std::min(column, c));
+    }
+    Position max_with(int r, int c) const {
+        return Position(std::max(row, r), std::max(column, c));
+    }
 };
 
 Position operator+(Position p, Dir step) {
@@ -98,6 +104,21 @@ public:
         for (int i = 0; i < ROWS; ++i) {
             cell_.push_back(std::vector<int>(COLUMNS, int(' ')));
         }
+        min_pos_ = Position(ROWS, COLUMNS);
+        max_pos_ = Position(0, 0);
+    }
+
+    void recompute_bounding_box() {
+        min_pos_ = Position(ROWS, COLUMNS);
+        max_pos_ = Position(0, 0);
+        for (int r = 0; r < ROWS; ++r) {
+            for (int c = 0; c < COLUMNS; ++c) {
+                if (cell_[r][c] != ' ') {
+                    min_pos_ = min_pos_.min_with(r, c);
+                    max_pos_ = max_pos_.max_with(r + 1, c + 1);
+                }
+            }
+        }
     }
 
     void init_from_file(FILE *fp) {
@@ -113,6 +134,10 @@ public:
                     throw std::runtime_error("too many rows or columns in program file");
                 }
                 cell_[row][column] = k;
+                if (k != ' ') {
+                    min_pos_ = min_pos_.min_with(row, column);
+                    max_pos_ = max_pos_.max_with(row + 1, column + 1);
+                }
                 column += 1;
             }
         }
@@ -138,36 +163,48 @@ public:
         return result;
     }
 
-    bool cell_is_blank(Position pos) const {
-        int r = (pos.row + 1000) % 100;
-        int c = (pos.column + 1000) % 100;
-        assert(0 <= r && r < 100);
-        assert(0 <= c && c < 100);
-        switch (cell_[r][c]) {
-            case ' ': return true;
+    Position wrap_to_bounding_box(Position pos) const {
+        while (pos.row < min_pos_.row) {
+            pos.row += (max_pos_.row - min_pos_.row);
         }
-        return false;
+        while (pos.row >= max_pos_.row) {
+            pos.row -= (max_pos_.row - min_pos_.row);
+        }
+        while (pos.column < min_pos_.column) {
+            pos.column += (max_pos_.column - min_pos_.column);
+        }
+        while (pos.column >= max_pos_.column) {
+            pos.column -= (max_pos_.column - min_pos_.column);
+        }
+        return pos;
     }
 
     int get(int row, int column) const {
-        if (!(0 <= row && row < 100 && 0 <= column && column < 100)) {
-            throw std::runtime_error(format("Out-of-bounds 'g' from (%d, %d) is not supported", row, column));
+        if (!(0 <= row && row < ROWS && 0 <= column && column < COLUMNS)) {
+            return ' ';
         }
         return cell_[row][column];
     }
 
     void put(int row, int column, int value) {
-        if (!(0 <= row && row < 100 && 0 <= column && column < 100)) {
+        if (!(0 <= row && row < ROWS && 0 <= column && column < COLUMNS)) {
             throw std::runtime_error(format("Out-of-bounds 'p' to (%d, %d) is not supported", row, column));
         }
         cell_[row][column] = value;
+        if (value != ' ') {
+            min_pos_ = min_pos_.min_with(row, column);
+            max_pos_ = max_pos_.max_with(row + 1, column + 1);
+        } else {
+            recompute_bounding_box();
+        }
     }
 
     int execute(Position pos, Dir fromthe, const Arguments& arguments) {
-        int r = (pos.row + 1000) % 100;
-        int c = (pos.column + 1000) % 100;
-        assert(0 <= r && r < 100);
-        assert(0 <= c && c < 100);
+        pos = this->wrap_to_bounding_box(pos);
+        int r = pos.row;
+        int c = pos.column;
+        assert(0 <= r && r < ROWS);
+        assert(0 <= c && c < COLUMNS);
         int term = cell_[r][c];
         switch (term) {
             case '0': return 0;
@@ -185,14 +222,7 @@ public:
             case '^': return execute(Position(r-1, c), Dir::SOUTH, arguments);
             case 'v': return execute(Position(r+1, c), Dir::NORTH, arguments);
             case ' ': return execute(Position(r, c) + flip(fromthe), fromthe, arguments);
-            case '#': {
-                Position p = pos + flip(fromthe);
-                while (cell_is_blank(p)) {
-                    p += flip(fromthe);
-                }
-                // Okay, that was the cell we were supposed to skip.
-                return execute(p + flip(fromthe), fromthe, arguments);
-            }
+            case '#': return execute(pos + flip(fromthe) + flip(fromthe), fromthe, arguments);
             case '+': {
                 int above = execute(Position(r, c) + Dir::NORTH, Dir::SOUTH, arguments);
                 int below = execute(Position(r, c) + Dir::SOUTH, Dir::NORTH, arguments);
@@ -300,6 +330,8 @@ public:
 
 private:
     std::vector<std::vector<int>> cell_;
+    Position min_pos_ = Position(0, 0);
+    Position max_pos_ = Position(0, 0);
 };
 
 int main(int argc, char **argv)
